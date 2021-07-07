@@ -2,7 +2,8 @@
 title: "Race, Education Level, Income"
 author: "Ted Braun"
 date: "7/5/2021"
-output: html_document
+## output: html_document
+output: github_document
 ---
 
 ```{r setup, include=FALSE}

@@ -3,7 +3,7 @@
     "path": "C:/various/kojinteki/programming/R/EducationData/CensusGov/Race_EducationLevel_Income/Race_Education_Level_Income.rmd",
     "project_path": "Race_Education_Level_Income.rmd",
     "type": "r_markdown",
-    "hash": "77795838",
+    "hash": "1046780450",
     "contents": "",
     "dirty": false,
     "created": 1625529373097.0,
@@ -11,15 +11,15 @@
     "relative_order": 6,
     "properties": {
         "tempName": "Untitled1",
-        "cursorPosition": "33,48",
+        "cursorPosition": "6,3",
         "scrollLine": "1"
     },
     "folds": "",
-    "lastKnownWriteTime": 1625625156,
+    "lastKnownWriteTime": 1625625966,
     "encoding": "UTF-8",
     "collab_server": "",
     "source_window": "",
-    "last_content_update": 1625625156703,
+    "last_content_update": 1625625966940,
     "read_only": false,
     "read_only_alternatives": []
 }
