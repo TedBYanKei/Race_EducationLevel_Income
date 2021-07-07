@@ -1,9 +1,9 @@
 {
     "id": "B55177E6",
-    "path": "C:/various/kojinteki/programming/R/EducationData/CensusGov/Race_EducationLevel_Income/Race_Education_Level_Income.rmd",
-    "project_path": "Race_Education_Level_Income.rmd",
-    "type": "r_markdown",
-    "hash": "1046780450",
+    "path": "C:/various/kojinteki/programming/R/EducationData/CensusGov/Race_EducationLevel_Income/README.md",
+    "project_path": "README.md",
+    "type": "markdown",
+    "hash": "0",
     "contents": "",
     "dirty": false,
     "created": 1625529373097.0,
@@ -11,15 +11,15 @@
     "relative_order": 6,
     "properties": {
         "tempName": "Untitled1",
-        "cursorPosition": "6,3",
-        "scrollLine": "1"
+        "cursorPosition": "4,0",
+        "scrollLine": "0"
     },
     "folds": "",
-    "lastKnownWriteTime": 1625625966,
+    "lastKnownWriteTime": 1625626176,
     "encoding": "UTF-8",
     "collab_server": "",
     "source_window": "",
-    "last_content_update": 1625625966940,
+    "last_content_update": 1625626176,
     "read_only": false,
     "read_only_alternatives": []
 }
