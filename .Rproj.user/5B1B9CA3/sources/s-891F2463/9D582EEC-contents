@@ -1,0 +1,249 @@
+#!/usr/bin/env Rscript
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+# This Loads data into the primary Waterline table 
+# 
+# 
+# 
+# 
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+suppressPackageStartupMessages(library(ROracle))
+suppressPackageStartupMessages(library(dplyr)) 
+suppressPackageStartupMessages(library(RODBC))
+suppressPackageStartupMessages(library(data.table)) 
+suppressPackageStartupMessages(library(purrr)) 
+suppressPackageStartupMessages(library(tidyr))
+suppressPackageStartupMessages(library(furrr)) 
+options(scipen = 999)
+drv <- dbDriver("Oracle")
+Sys.setenv(TZ='MST')
+Sys.setenv(ORA_SDTZ='MST')
+
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+# Config Var's
+LeadTime_Shift_Weeks <- 3
+WrkingDir <- paste("/apps/planapp/dst/Rscripts/dst_team/Waterline/", sep="", collapse="") 
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+YMLConfigDir <- paste("/apps/planapp/dst/config/", sep="", collapse="") 
+YMLConfigDirFile <- paste(YMLConfigDir, "con_config.yml", sep="", collapse="") 
+scriptName <- "WL_RD_Upd.r"
+LogFileStartText <- paste("Starting: ", scriptName, sep = "")
+LogFileEndText <- paste("Ending: ", scriptName, sep = "")
+scriptName_no_suf <- gsub("\\.r$", "", scriptName)
+
+suppressPackageStartupMessages(library(futile.logger))
+setwd("/apps/planapp/dst/Rscripts/dst_team/")
+CurrYMD <-format(Sys.Date(), "%Y%m%d")
+CurrYMDHMS <-format(Sys.time(), "%Y%m%d %H:%M:%S")
+LogFileUseName <-  paste(substr(scriptName,1, nchar(scriptName) - 2), "_", CurrYMD, sep="", collapse="") 
+
+YMLConfigDir <- paste("/apps/planapp/dst/config/", sep="", collapse="") 
+#Get YAML Config file vars for Logger and other attributes
+YMLConfigArgsFile <- paste(YMLConfigDir, "r_args.yml", sep="", collapse="") 
+arg_Log     = config::get(file=YMLConfigArgsFile, config='Logger')
+Dir_Logger  = arg_Log$DefDir
+
+#Get YAML Config file vars for connection info
+argFunctions = config::get(file=YMLConfigArgsFile, config='Functions')
+BaseFunctions = argFunctions$BaseFuncs
+source(BaseFunctions)
+YMLConfigConnFile <- paste(YMLConfigDir, "con_config.yml", sep="", collapse="") 
+
+logFile <- paste(Dir_Logger, "/", scriptName_no_suf, "_", CurrYMD, ".txt", sep = "")
+flog.appender(appender.file(logFile))
+flog.info("****************************************************************")
+flog.info(LogFileStartText)
+Sys.chmod(logFile, mode = "0777", use_umask = TRUE)
+Sys.chmod(logFile, mode = "0777", use_umask = FALSE)
+
+con_dwprd <- ConnectToOracleDB('dwprd_ffbj4n')  
+con_plan_ins <- ConnectToOracleDB('planprd') #planqa planprd plandev 
+con_plan_dm_view <- ConnectToOracleDB('planprd_dm_view') #plandev_dmview planprd_dm_view
+
+
+setwd(WrkingDir)
+source("funcs_WL.r")
+
+PriorTwoWks_DF <- GetPriorTwoWLWks()  #Get the prior two weeks from the HYB_WATERLINE table 
+YYYYWW_CurrWk <- as.integer(PriorTwoWks_DF[1,1])
+YYYYWW_PriorWk <- as.integer(PriorTwoWks_DF[2,1])
+str(YYYYWW_PriorWk)
+
+PriorWk <- GetPriorWk_WL_Data(YYYYWW_PriorWk)  #Get the prior week of data by the SNAP_SHOT_YYYYWW from the HYB_WATERLINE table 
+CurrWk <- GetCurrentWk_WL_Data(YYYYWW_CurrWk)  #Get the current week of data by the SNAP_SHOT_YYYYWW from the HYB_WATERLINE table 
+#tmp_PriorWk <- PriorWk %>% filter(PRODUCT_LEVEL_VAL == "SMUN5214T1G" & CUST_LEVEL_VAL == "TRWS")
+#tmp_CurrWk <- CurrWk %>% filter(PRODUCT_LEVEL_VAL == "SMUN5214T1G" & CUST_LEVEL_VAL == "TRWS")
+#str(PriorWk)
+#print(PriorWk)
+#str(CurrWk)
+#str(tmp_PriorWk)
+#str(tmp_CurrWk)
+#print(tmp_PriorWk)
+
+OverUnderBills <- GetOverUnderBillQtys_WkZero(YYYYWW_PriorWk, YYYYWW_CurrWk)
+PriorWkShipments <- GetPriorWkShipments(YYYYWW_CurrWk)
+
+str(PriorWkShipments)
+#t <- PriorWkShipments %>% 
+#  filter(PC == "NCV7520FPR2G|CTIC")
+#print(t)
+
+#tmp_CurrWkPWk <- merge(tmp_CurrWk, tmp_PriorWk, by.x = c("PRODUCT_LEVEL_VAL", "CUST_LEVEL_VAL", "DMD_YYYYWW"), by.y = c("PRODUCT_LEVEL_VAL", "CUST_LEVEL_VAL", "DMD_YYYYWW"), all.x = TRUE)
+#str(tmp_CurrWkPWk)
+#WriteAFile(tmp_CurrWkPWk)
+#tmp_CurrWkPWk$PW_WK_WATERLINE_QTY_Cuml[is.na(tmp_CurrWkPWk$PW_WK_WATERLINE_QTY_Cuml)] <- 0
+
+#av <- "06817-807-XTDz|ARPT"
+#str(av)
+#aOverBill_Qty <- as.integer((OverUnderBills[PC == av,])[1,1]) 
+#if (is.na(aOverBill_Qty)) {
+#  aOverBill_Qty <- 0
+#}
+#aOverBill_Qty <- as.integer(aOverBill[1,1])
+#str(aOverBill)
+#str(aOverBill_Qty)
+
+#aQFile <- CurrWk[PRODUCT_LEVEL_VAL %like% "06817-807-XTD"]
+#WriteAFile(aQFile)
+
+#**************************************
+#**************************************
+#**************************************
+CurrWkPWk <- merge(CurrWk, PriorWk, by.x = c("PRODUCT_LEVEL_VAL", "CUST_LEVEL_VAL", "DMD_YYYYWW"), by.y = c("PRODUCT_LEVEL_VAL", "CUST_LEVEL_VAL", "DMD_YYYYWW"), all.x = TRUE)
+#I think this next line should be commented out:
+#CurrWkPWk$PW_WK_WATERLINE_QTY_Cuml[is.na(CurrWkPWk$PW_WK_WATERLINE_QTY_Cuml)] <- 0
+
+
+#From Documentation:
+# CUML_PRIORWK_WATERLINE_QTY:  
+#  The CUML_PRIORWK_WATERLINE_QTY column is a copy of the prior week’s WK_WATERLINE_QTY values cumulated.  
+#  As mentioned above, the first time this data is seeded, the CUML_PRIORWK_WATERLINE_QTY column would simply equal the CUML_DMD_QTY.  
+#  Also it should be noted that an ability to “reset” and thus “seed from a fresh start” should be a functionality which exists in any implemented codebase.
+#    The following line uses from prior week else seeds it equal to the current CUML_DMD_QTY
+CurrWkPWk$CUML_PRIORWK_WATERLINE_QTY <- with(CurrWkPWk, ifelse(is.na(PW_WK_WATERLINE_QTY_Cuml), CUML_DMD_QTY, PW_WK_WATERLINE_QTY_Cuml))
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+# Start
+# Need to reduce the CurrWkPWk$CUML_PRIORWK_WATERLINE_QTY by the amount of what was shipped - thus from PriorWkShipments.
+# So it should be merged in in a left join manner, if no match then made zero, then reduce all of the CUML_PRIORWK_WATERLINE_QTY records 
+#   down by that (the qty in PriorWkShipments.) amount.
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+CurrWkPWk$PC <- paste(CurrWkPWk$PRODUCT_LEVEL_VAL, "|", CurrWkPWk$CUST_LEVEL_VAL, sep = "")
+CurrWkPWk <- merge(CurrWkPWk, PriorWkShipments, by.x = c("PC"), by.y = c("PC"), all.x = TRUE)
+CurrWkPWk$CURRWK_PW_SHIPS[is.na(CurrWkPWk$CURRWK_PW_SHIPS)] <- 0
+CurrWkPWk$CUML_PRIORWK_WATERLINE_QTY <- with(CurrWkPWk, ifelse(CUML_PRIORWK_WATERLINE_QTY - CURRWK_PW_SHIPS < 0, 0, CUML_PRIORWK_WATERLINE_QTY - CURRWK_PW_SHIPS))
+#tmp_CurrWkPWk <- CurrWkPWk %>% filter(PRODUCT_LEVEL_VAL == "NCV7520FPR2G" & CUST_LEVEL_VAL == "CTIC") %>% 
+#  select(PC, DMD_YYYYWW, DMD_WKS_OUT, DMD_QTY, CUML_DMD_QTY, PW_WK_WATERLINE_QTY_Cuml, CURRWK_PW_SHIPS, CUML_PRIORWK_WATERLINE_QTY)
+#print(tmp_CurrWkPWk)
+CurrWkPWk$PC <- NULL
+CurrWkPWk$CURRWK_PW_SHIPS <- NULL
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+# End
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+CurrWkPWk$PW_WK_WATERLINE_QTY_Cuml <- NULL
+
+##@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+## Start - I need to make sure what I am doing in this section is correct - Ted B 2019-06-18
+##Get prior week CUML_PRIORWK_WATERLINE_QTY in the first week only
+#CurrWk_Wk0_CPWQ <- CurrWkPWk[DMD_WKS_OUT == 0, .(PRODUCT_LEVEL_VAL, CUST_LEVEL_VAL, CUML_PRIORWK_WATERLINE_QTY)]
+##str(CurrWk_Wk0_CPWQ)
+#setnames(CurrWk_Wk0_CPWQ, old=c("CUML_PRIORWK_WATERLINE_QTY"), new=c("CPWWQ_Wk0"))
+#CurrWkPWk <- merge(CurrWkPWk, CurrWk_Wk0_CPWQ, by.x = c("PRODUCT_LEVEL_VAL", "CUST_LEVEL_VAL"), by.y = c("PRODUCT_LEVEL_VAL", "CUST_LEVEL_VAL"), all.x = TRUE)
+##str(CurrWkPWk)
+##WriteAFile(CurrWkPWk)
+#CurrWkPWk$tmpCRWLQ <- with(CurrWkPWk, ifelse(CUML_PRIORWK_WATERLINE_QTY - CPWWQ_Wk0 <= 0, 0, CUML_PRIORWK_WATERLINE_QTY - CPWWQ_Wk0))
+##CurrWkPWk$CPWWQ_Wk0 <- NULL  #No longer needed
+#CurrWkPWk$CUML_REVISED_WATERLINE_QTY_Pre <- with(CurrWkPWk, ifelse(CUML_DMD_QTY < tmpCRWLQ, CUML_DMD_QTY, tmpCRWLQ))
+##CurrWkPWk$tmpCRWLQ <- NULL  #No longer needed
+#WriteAFile(CurrWkPWk)
+## End - I need to make sure what I am doing in this section is correct - Ted B 2019-06-18
+##@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+CurrWkPWk$CUML_REVISED_WATERLINE_QTY_Pre <- with(CurrWkPWk, ifelse(CUML_DMD_QTY < CUML_PRIORWK_WATERLINE_QTY, CUML_DMD_QTY, CUML_PRIORWK_WATERLINE_QTY))
+
+CurrWkPWk$LEADTIME_WKS <- with(CurrWkPWk, ifelse(is.na(LEADTIME_WKS), 52, 
+                                          ifelse(LEADTIME_WKS > 52, 52, LEADTIME_WKS)))
+#If we are equal to or beyond the LeadTime in weeks, then we simply set the CUML_REVISED_WATERLINE_QTY equal to the CUML_DMD_QTY
+CurrWkPWk$CUML_REVISED_WATERLINE_QTY <- with(CurrWkPWk, ifelse(DMD_WKS_OUT >= LEADTIME_WKS, CUML_DMD_QTY, CUML_REVISED_WATERLINE_QTY_Pre))
+CurrWkPWk$CUML_REVISED_WATERLINE_QTY_Pre <- NULL  #No longer need it
+
+# Start - In this section I am doing what is in column 6 ('WK WATERLINE QTY')
+CurrWkPWk<- CurrWkPWk[,CUML_REVISED_WATERLINE_QTY_Lag1:=shift(CUML_REVISED_WATERLINE_QTY, 1, type='lag')]
+CurrWkPWk$CUML_REVISED_WATERLINE_QTY_Lag1[is.na(CurrWkPWk$CUML_REVISED_WATERLINE_QTY_Lag1)] <- 0
+CurrWkPWk$CUML_REVISED_WATERLINE_QTY_Lag1 <- with(CurrWkPWk, ifelse(DMD_WKS_OUT == -1, 0, CUML_REVISED_WATERLINE_QTY_Lag1))
+CurrWkPWk$CUML_REVISED_WATERLINE_QTY_Lag1 <- with(CurrWkPWk, ifelse(DMD_WKS_OUT == 0, 0, CUML_REVISED_WATERLINE_QTY_Lag1))
+CurrWkPWk$WK_WATERLINE_QTY <- with(CurrWkPWk, CUML_REVISED_WATERLINE_QTY - CUML_REVISED_WATERLINE_QTY_Lag1)
+CurrWkPWk$WK_WATERLINE_QTY <- with(CurrWkPWk, ifelse(DMD_WKS_OUT == -1, 0, WK_WATERLINE_QTY))
+CurrWkPWk$PC <- paste(CurrWkPWk$PRODUCT_LEVEL_VAL, "|", CurrWkPWk$CUST_LEVEL_VAL, sep = "")
+str(CurrWkPWk)
+
+#CUML_REVISED_WATERLINE_QTY_Lag1 	 
+#WK_WATERLINE_QTY 
+
+
+#printPart <- "14984-009-XTD"
+#printCorp <- "AVGC"
+
+CurrWkPWk_Cpy <- cbind(CurrWkPWk)
+#CurrWkPWk <- cbind(CurrWkPWk_Cpy)
+#CurrWkPWk <- CurrWkPWk[PRODUCT_LEVEL_VAL %like% "14984"]
+#CurrWkPWk <- CurrWkPWk[PRODUCT_LEVEL_VAL %like% "14164-002"]
+#WriteAFile(CurrWkPWk)
+
+
+setkey(CurrWkPWk, PC)
+vecPartCorp <- unique(CurrWkPWk[['PC']])
+
+num_cores <- availableCores() - 6
+plan(multicore, workers = num_cores)
+
+#rm(CurrWk_Data_w_all_Columns)
+CurrWk_Data_w_all_Columns <- future_map_dfr(vecPartCorp, funcGetLTQty)
+tmpDT <- CurrWk_Data_w_all_Columns[PRODUCT_LEVEL_VAL == "06817-807-XTD"]
+str(CurrWk_Data_w_all_Columns)
+str(tmpDT)
+
+CurrWk_Data_w_all_Columns$PC <- NULL  #Column no longer required
+CurrWk_Data_w_all_Columns$CUML_REVISED_WATERLINE_QTY_Lag1 <- NULL  #Column no longer required
+colnames(CurrWk_Data_w_all_Columns)[colnames(CurrWk_Data_w_all_Columns)=="LeadTime_Appropriate_Qty"] <- "LEADTIME_APPROPRIATE_QTY"
+colnames(CurrWk_Data_w_all_Columns)[colnames(CurrWk_Data_w_all_Columns)=="LeadTime_Violation_Qty"] <- "LEADTIME_VIOLOATION_QTY"
+colnames(CurrWk_Data_w_all_Columns)[colnames(CurrWk_Data_w_all_Columns)=="Prior_Wk_Ship_Qty"] <- "PRIOR_WK_SHIPMENTS_WK0"
+
+colnames(CurrWk_Data_w_all_Columns)[colnames(CurrWk_Data_w_all_Columns)=="Cuml_Revs_Wtrl_Qty_minus_OverBill"] <- "CUML_REVISED_WATERLINE_QTY_MOB"
+
+
+
+WriteAFile(tmpDT)
+WriteAFile(CurrWk_Data_w_all_Columns)
+
+#
+
+CurrWk_Data_w_all_Columns$PRODUCT_LEVEL_DEF <- rep("PART_ID",nrow(CurrWk_Data_w_all_Columns))
+CurrWk_Data_w_all_Columns$CUST_LEVEL_DEF <- rep("CORP",nrow(CurrWk_Data_w_all_Columns))
+CurrWk_Data_w_all_Columns$SNAP_SHOT_YYYYWW <- rep(YYYYWW_CurrWk,nrow(CurrWk_Data_w_all_Columns))
+CurrWk_Data_w_all_Columns$TIME_TYPE <- rep("CRSD",nrow(CurrWk_Data_w_all_Columns))
+
+Get_Curr_Dttm <- Get_Curr_Dttm() #Returns Sysdate in 'YYYY-MM-DD HH24:MI:SS' format 
+CurrWk_Data_w_all_Columns$RECORD_DTTM <- rep(Get_Curr_Dttm,nrow(CurrWk_Data_w_all_Columns))
+
+CurrWk_Data_w_all_Columns <- CurrWk_Data_w_all_Columns[, c("SNAP_SHOT_YYYYWW", "DMD_WKS_OUT", "DMD_YYYYWW", "PRODUCT_LEVEL_DEF", "PRODUCT_LEVEL_VAL", "CUST_LEVEL_DEF", "CUST_LEVEL_VAL", "TIME_TYPE", "DMD_QTY", "CUML_DMD_QTY", "CUML_PRIORWK_WATERLINE_QTY", "CUML_REVISED_WATERLINE_QTY", "WK_WATERLINE_QTY", "LEADTIME_APPROPRIATE_QTY", "LEADTIME_WKS", "RECORD_DTTM", "LEADTIME_VIOLOATION_QTY", "PRIOR_WK_SHIPMENTS_WK0")]
+
+str(YYYYWW_CurrWk)
+str(CurrWk_Data_w_all_Columns)
+DeleteWeekGonnaInsert(YYYYWW_CurrWk) #Calls the function DeleteWeekGonnaInsert and simply deletes a week in the DM_RFORECASTING.HYB_WATERLINE table
+InsertAWeek_AllColumns(CurrWk_Data_w_all_Columns) #This requires all columns in the HYB_WATERLINE table ordered correctly
+
+str(CurrWk_Data_w_all_Columns)
+#WriteAFile(CurrWk_Data_w_all_Columns)
+
+tf <- DeleteAggr()
+tf <- InsertAggr()
+tf <- DeleteDistinctValues()
+tf <- InsertDistinctValues()
+
+dbDisconnect(con_plan_dm_view)
+dbDisconnect(con_plan_ins)
+dbDisconnect(con_dwprd)
+
+print(LogFileEndText)
+flog.info(LogFileEndText)
+flog.info("****************************************************************")

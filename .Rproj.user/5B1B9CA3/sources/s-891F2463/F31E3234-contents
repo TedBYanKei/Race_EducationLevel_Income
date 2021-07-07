@@ -1,0 +1,223 @@
+#!/usr/bin/env Rscript
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+# This Loads data into the primary Waterline table 
+# 
+# 
+# 
+# 
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+suppressPackageStartupMessages(library(ROracle))
+suppressPackageStartupMessages(library(dplyr)) 
+suppressPackageStartupMessages(library(RODBC))
+suppressPackageStartupMessages(library(data.table)) 
+suppressPackageStartupMessages(library(purrr)) 
+suppressPackageStartupMessages(library(tidyr))
+options(scipen = 999)
+drv <- dbDriver("Oracle")
+Sys.setenv(TZ='MST')
+Sys.setenv(ORA_SDTZ='MST')
+
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+# Config Var's
+LeadTime_Shift_Weeks <- 3
+WrkingDir <- paste("/apps/planapp/dst/Rscripts/dst_team/Waterline/", sep="", collapse="") 
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+YMLConfigDir <- paste("/apps/planapp/dst/config/", sep="", collapse="") 
+YMLConfigDirFile <- paste(YMLConfigDir, "con_config.yml", sep="", collapse="") 
+scriptName <- "WL_RD_Load.r"
+LogFileStartText <- paste("Starting: ", scriptName, sep = "")
+LogFileEndText <- paste("Ending: ", scriptName, sep = "")
+scriptName_no_suf <- gsub("\\.r$", "", scriptName)
+
+suppressPackageStartupMessages(library(futile.logger))
+setwd("/apps/planapp/dst/Rscripts/dst_team/")
+CurrYMD <-format(Sys.Date(), "%Y%m%d")
+CurrYMDHMS <-format(Sys.time(), "%Y%m%d %H:%M:%S")
+LogFileUseName <-  paste(substr(scriptName,1, nchar(scriptName) - 2), "_", CurrYMD, sep="", collapse="") 
+
+YMLConfigDir <- paste("/apps/planapp/dst/config/", sep="", collapse="") 
+#Get YAML Config file vars for Logger and other attributes
+YMLConfigArgsFile <- paste(YMLConfigDir, "r_args.yml", sep="", collapse="") 
+arg_Log     = config::get(file=YMLConfigArgsFile, config='Logger')
+Dir_Logger  = arg_Log$DefDir
+
+#Get YAML Config file vars for connection info
+argFunctions = config::get(file=YMLConfigArgsFile, config='Functions')
+BaseFunctions = argFunctions$BaseFuncs
+source(BaseFunctions)
+YMLConfigConnFile <- paste(YMLConfigDir, "con_config.yml", sep="", collapse="") 
+
+logFile <- paste(Dir_Logger, "/", scriptName_no_suf, "_", CurrYMD, ".txt", sep = "")
+flog.appender(appender.file(logFile))
+flog.info("****************************************************************")
+flog.info(LogFileStartText)
+Sys.chmod(logFile, mode = "0777", use_umask = TRUE)
+Sys.chmod(logFile, mode = "0777", use_umask = FALSE)
+
+con_dwprd <- ConnectToOracleDB('dwprd_ffbj4n')  
+con_SDM <- ConnectToSQLServerDB('sdm_salesreporting')
+con_plan_ins <- ConnectToOracleDB('planprd') #planqa planprd plandev 
+con_plan_dm_view <- ConnectToOracleDB('planprd_dm_view') #plandev_dmview planprd_dm_view
+
+
+setwd(WrkingDir)
+source("funcs_WL.r") 
+intLastWk <- GetLastWk()  #Calls the function GetLastWk, Simply get last Fiscal week
+
+WW_to_PriorWW <- GetYw_to_prior_Yw() #Calls the function GetYw_to_prior_Yw, returns Dataframe of weeks just one week apart
+
+#Get shifted YW to another for multiple lags
+LeadList <- c(0:52) 
+LeadsWWs <- map_dfr(LeadList, GetLeads) #Calls the function GetLeads
+LeadsWWs_Lag1 <- GetLag1() #Call the function GetLag1
+LeadsWWs <- as.data.table(rbind(LeadsWWs, LeadsWWs_Lag1))
+str(LeadsWWs)
+
+#This gets 52 weeks out
+WW_to_LeadWW <- LeadsWWs[LEAD == 52, ]
+keeps <- c("SS_YYYYWW","SS_LEAD_YYYYWW")
+WW_to_LeadWW <- WW_to_LeadWW[ , (names(WW_to_LeadWW) %in% keeps), with=FALSE]
+
+LagList <- c(0:52) 
+LagsWWs <- map_dfr(LagList, GetLags) #Calls the function GetLeads
+str(LagsWWs)
+
+WaterLinePriorWk <- GetMostRecent_WL_DataWk() #Calls the function GetMostRecent_WL_DataWk
+WaterLinePriorWkInt <- as.integer(WaterLinePriorWk[1,1])
+#So now I have the most recent Waterline data from the prior week.  So for example if the date were 6/9/2019 (which is in 201924), 
+#  I would now know that I need to get data (backlog, billing, and leadtime based upon/for 201923 (and for leadtime at the lag # of weeks from it))
+#  Ted 6/15:  Would seem as though if I have for example 201924 in the value of WaterLinePriorWkInt then I would need to get 201925
+
+
+str(WaterLinePriorWk)
+str(WaterLinePriorWkInt)
+
+#nextYW_DataToGet
+tmp <- LeadsWWs %>% 
+  filter(SS_YYYYWW == WaterLinePriorWkInt & LEAD == 1) %>% 
+  select(SS_LEAD_YYYYWW)
+nextYW_DataToGet <- as.integer(tmp[1,1])
+str(WaterLinePriorWkInt)
+str(nextYW_DataToGet)
+rm(tmp)
+
+tmp <- LagsWWs %>% 
+  filter(SS_YYYYWW == nextYW_DataToGet & LAG == LeadTime_Shift_Weeks) %>% 
+  select(SS_LAG_YYYYWW)
+LeadTime_Lag_Val <- as.integer(tmp[1,1])  #So now we have the workweek we want for leadtime information
+
+LTVals <- GetLTs(LeadTime_Lag_Val)
+str(LTVals)
+str(WaterLinePriorWkInt)
+str(nextYW_DataToGet)
+
+#This returns a single week of billings
+SDM_Bill <- GetWeekOfBilling(WaterLinePriorWkInt) #Calls the function GetWeekOfBilling to get a week's worth of Sell-In Billings
+#The reason I do this is that the Bill week will be for example 201923, whereas the Bklg week will be 201924.
+#  So am bumping the SDM_Bill week forward one week, so that then Bklg and Bill can be joined together
+SDM_Bill <- merge(SDM_Bill, WW_to_PriorWW, by.x = "BILL_YYYYWW", by.y = "SS_PREV_YYYYWW", all.x = TRUE)
+colnames(SDM_Bill)[colnames(SDM_Bill)=="SS_YYYYWW"] <- "YYYYWW_Wk_After_Bill_Wk"
+str(SDM_Bill)
+
+#Don't really need to do the map_dfr as only doing one week (vector of 1). Thus the "BklgSnapShots" is really just a snapshot of 1 week.
+vecBklgSSWks <- c(nextYW_DataToGet)
+BklgSnapShots <- map_dfr(vecBklgSSWks, GetBklg)
+str(BklgSnapShots)
+
+BklgSnapShots <- BklgSnapShots[order(SS_YYYYWW, PART_ID, DIR_CORP, YYYYWW)]
+BklgSnapShotsCompl <- cbind(BklgSnapShots)
+
+#Now lets limit LeadDT to just the SS_YYYYWW's we are interested in
+keeps <- c("SS_YYYYWW")
+BklgSSPWksOnly <- cbind(BklgSnapShotsCompl)
+BklgSSPWksOnly <- BklgSSPWksOnly[ , (names(BklgSSPWksOnly) %in% keeps), with=FALSE]
+BklgSSPWksOnly <- unique(BklgSSPWksOnly, by = "SS_YYYYWW")
+str(BklgSSPWksOnly)
+
+B_Sprd <- BklgSnapShotsCompl %>% 
+  spread(YYYYWW, BKLG_QTY, fill = 0)
+BB_CurrWk <- gather(B_Sprd, key = "YYYYWW", value = "Qty", -SS_YYYYWW, -PART_ID, -DIR_CORP)
+
+BB_CurrWk <- filter(BB_CurrWk, YYYYWW >= SS_YYYYWW)
+BB_CurrWk <- BB_CurrWk %>% 
+  group_by(SS_YYYYWW, PART_ID, DIR_CORP) %>% 
+  mutate(CumlQty = cumsum(Qty))
+BB_CurrWk <- as.data.table(BB_CurrWk)
+
+
+#So after this LeadsDT will have for the SS_YYYYWW's all of the weeks needed (1 week in the past and 52 into the future)
+LeadsDT <- merge(LeadsWWs, BklgSSPWksOnly, by.x = "SS_YYYYWW", by.y = "SS_YYYYWW")
+str(LeadsDT)
+keeps <- c("SS_YYYYWW", "SS_LEAD_YYYYWW")
+LeadsDT_SE <- LeadsDT[ , (names(LeadsDT) %in% keeps), with=FALSE]
+
+LeadsDT_PriorWk <- filter(LeadsDT, LEAD == -1) %>% 
+  select(SS_YYYYWW, SS_LEAD_YYYYWW) 
+str(BB_CurrWk)
+str(SDM_Bill)
+#The point of this section is to line up the Billing data such that it matches to just the Bklg data
+SDM_Bill_Limit <- merge(BB_CurrWk, SDM_Bill, by.x = c("SS_YYYYWW", "PART_ID", "DIR_CORP"), by.y = c("YYYYWW_Wk_After_Bill_Wk", "PART_ID", "DIR_CORP"), all.x = TRUE)
+SDM_Bill_Limit <- merge(SDM_Bill_Limit, LeadsDT_PriorWk, by.x = "SS_YYYYWW", by.y = "SS_YYYYWW", all.x = TRUE)
+SDM_Bill_Limit$BILL_QTY[is.na(SDM_Bill_Limit$BILL_QTY)] <- 0
+SDM_Bill_Limit$BILL_YYYYWW <- with(SDM_Bill_Limit, ifelse(is.na(BILL_YYYYWW), SS_LEAD_YYYYWW, BILL_YYYYWW))
+SDM_Bill_Limit <- filter(SDM_Bill_Limit, YYYYWW == SS_YYYYWW)
+
+drops <- c("YYYYWW","Qty", "CumlQty", "SS_LEAD_YYYYWW")
+SDM_Bill_Limit <- SDM_Bill_Limit[ , !(names(SDM_Bill_Limit) %in% drops)]
+
+
+
+
+#So now we get the prior week billing which is relevant and rbind it to the backlog data
+SDM_Bill_Limit$CumlQty <- rep(0,nrow(SDM_Bill_Limit)) 
+colnames(SDM_Bill_Limit)[1] <- "SS_YYYYWW"
+colnames(SDM_Bill_Limit)[4] <- "YYYYWW"
+colnames(SDM_Bill_Limit)[5] <- "Qty"
+str(SDM_Bill_Limit)
+
+BB_CurrWk <- rbind(BB_CurrWk,SDM_Bill_Limit)
+BB_CurrWk <- BB_CurrWk[order(SS_YYYYWW, PART_ID, DIR_CORP, YYYYWW)]
+BB_CurrWk$YYYYWW <- as.integer(BB_CurrWk$YYYYWW)
+
+#Bring in Leadtime and get the # of weeks out for each backlog dmd
+BB_CurrWk <- merge(BB_CurrWk, LeadsDT, by.x = c("SS_YYYYWW", "YYYYWW"), by.y = c("SS_YYYYWW", "SS_LEAD_YYYYWW"), all.x = TRUE)
+BB_CurrWk <- BB_CurrWk[!is.na(LEAD),]
+BB_CurrWk <- merge(BB_CurrWk, LTVals, by.x = c("PART_ID"), by.y = c("PART_ID"), all.x = TRUE)
+BB_CurrWk$LEADTIME_WKS <- with(BB_CurrWk, 
+                               ifelse(is.na(LEADTIME_WKS), 52, 
+                                      ifelse(LEADTIME_WKS > 52, 52, LEADTIME_WKS)))
+
+#t <- BB_CurrWk %>% 
+#  filter(PART_ID == "NCV7520FPR2G")
+#print(t)
+
+BB_CurrWk$PRODUCT_LEVEL_DEF <- rep("PART_ID",nrow(BB_CurrWk)) # make new column 
+BB_CurrWk$CUST_LEVEL_DEF <- rep("CORP",nrow(BB_CurrWk)) # make new column 
+BB_CurrWk$TIME_TYPE <- rep("CRSD",nrow(BB_CurrWk)) # make new column 
+BB_CurrWk$RECORD_DTTM <- rep(CurrYMDHMS,nrow(BB_CurrWk)) # make new column 
+
+BB_CurrWk <- setnames(BB_CurrWk,
+                      c("SS_YYYYWW", "LEAD", "YYYYWW", "PART_ID", "DIR_CORP", "Qty", "CumlQty"),  # old column names
+                      c("SNAP_SHOT_YYYYWW", "DMD_WKS_OUT", "DMD_YYYYWW", "PRODUCT_LEVEL_VAL", "CUST_LEVEL_VAL", "DMD_QTY", "CUML_DMD_QTY"))  # corresponding new column names
+
+
+setcolorder(BB_CurrWk, c("SNAP_SHOT_YYYYWW", "DMD_WKS_OUT", "DMD_YYYYWW", "PRODUCT_LEVEL_DEF", "PRODUCT_LEVEL_VAL", "CUST_LEVEL_DEF", "CUST_LEVEL_VAL", "TIME_TYPE", "DMD_QTY", "CUML_DMD_QTY", "LEADTIME_WKS", "RECORD_DTTM"))
+str(BB_CurrWk)
+#WriteAFile(BB_CurrWk)
+#WriteAFile(SDM_Bill_Limit)
+#BB_CurrWk[c("SNAP_SHOT_YYYYWW", "DMD_WKS_OUT", "DMD_YYYYWW", "PRODUCT_LEVEL_DEF", "PRODUCT_LEVEL_VAL", "CUST_LEVEL_DEF", "CUST_LEVEL_VAL", "TIME_TYPE", "DMD_QTY", "CUML_DMD_QTY", "LEADTIME_WKS", "RECORD_DTTM")]
+
+
+str(BB_CurrWk)
+DeleteWeekGonnaInsert(nextYW_DataToGet) #Calls the function DeleteWeekGonnaInsert and simply deletes a week in the DM_RFORECASTING.HYB_WATERLINE table
+InsertAWeek(BB_CurrWk) #Insert a Snapshot week of backlog (and the prior week of Billings as the -1 week)
+
+dbDisconnect(con_plan_dm_view)
+dbDisconnect(con_plan_ins)
+dbDisconnect(con_dwprd)
+
+print(LogFileEndText)
+flog.info(LogFileEndText)
+flog.info("****************************************************************")

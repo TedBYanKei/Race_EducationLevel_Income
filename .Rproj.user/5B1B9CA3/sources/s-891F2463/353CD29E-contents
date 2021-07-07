@@ -1,0 +1,232 @@
+#!/usr/bin/env Rscript
+#.libPaths("/apps/planapp/dst/RLibs")
+#.libPaths("/usr/lib64/R/library")
+.libPaths( c( .libPaths(), "/apps/planapp/dst/RLibs") )
+
+
+library(tidyr)
+#require(data.table)
+library(dplyr)
+library(XML)
+library(RCurl)
+library(ROracle)
+drv <- dbDriver("Oracle")
+
+
+scriptName <- "rr_BUResp_Sharepoint_to_Table.r"
+LogFileStartText <- paste("Starting: ", scriptName, sep = "")
+LogFileEndText <- paste("Ending: ", scriptName, sep = "")
+
+getwd()
+library(futile.logger)
+setwd("/apps/planapp/dst/Rscripts/dst_team/")
+CurrYMD <-format(Sys.Date(), "%Y%m%d")
+
+#This is the only directory being hardcoded
+YMLConfigDir <- paste("/apps/planapp/dst/config/", sep="", collapse="") 
+#Get YAML Config file vars for Logger and other attributes
+YMLConfigArgsFile <- paste(YMLConfigDir, "r_args.yml", sep="", collapse="") 
+arg_Log     = config::get(file=YMLConfigArgsFile, config='Logger')
+Dir_Logger  = arg_Log$DefDir
+
+arg_SharePoint = config::get(file=YMLConfigArgsFile, config='SaveSharepointDirs')
+
+
+#Get YAML Config file vars for connection info
+YMLConfigConnFile <- paste(YMLConfigDir, "con_config.yml", sep="", collapse="") 
+planprd           = config::get(file=YMLConfigConnFile, config='planprd') #planqa planprd
+db_str_plan = sprintf("(DESCRIPTION = (ADDRESS = (PROTOCOL = TCP)(HOST = %s) (PORT = %s))(CONNECT_DATA = (SERVICE_NAME = %s)))", planprd$host, planprd$port, planprd$sid)
+drv_plan = dbDriver(planprd$driver)
+con_plan <- dbConnect(drv_plan, username = planprd$user_id, password = planprd$password, dbname = db_str_plan)
+
+dwprd           = config::get(file=YMLConfigConnFile, config='dwprd_ffbj4n') #planqa planprd
+dwprd_db_str_plan = sprintf("(DESCRIPTION = (ADDRESS = (PROTOCOL = TCP)(HOST = %s) (PORT = %s))(CONNECT_DATA = (SERVICE_NAME = %s)))", dwprd$host, dwprd$port, dwprd$sid)
+dwprd_drv_plan = dbDriver(dwprd$driver)
+dwprd_con_plan <- dbConnect(dwprd_drv_plan, username = dwprd$user_id, password = dwprd$password, dbname = dwprd_db_str_plan)
+
+
+#Start the Logger
+CurrYMD <-format(Sys.Date(), "%Y%m%d")
+logFile <- paste(Dir_Logger, "/rr_BUResp_Sharepoint_to_Table_", CurrYMD, ".txt", sep = "")
+flog.appender(appender.file(logFile))
+flog.info("****************************************************************")
+flog.info(LogFileStartText)
+Sys.chmod(logFile, mode = "0777", use_umask = TRUE)
+Sys.chmod(logFile, mode = "0777", use_umask = FALSE)
+
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+# Start Parse XML file
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+Sharepoint_URL <- paste("http://theconnection.onsemi.com/GSCO/MP/Kinaxistop/Kinaxis/_vti_bin/owssvr.dll?Cmd=Display&List={B3422CA7-C771-435C-99B5-1766C5A9C10B}&XMLDATA=TRUE", sep="", collapse="") 
+#Actual List URL is:
+#  http://theconnection.onsemi.com/GSCO/MP/Kinaxistop/Kinaxis/Lists/BU_Responsibilities/AllItems.aspx  
+ffbj4n_win      = config::get(file='/apps/planapp/dst/config/con_config.yml', config='windows_ffbj4n') 
+ffbj4n_win_uid  = ffbj4n_win$user_id
+ffbj4n_win_pswd = ffbj4n_win$password
+ffbj4n_win_uid_pswd <- paste(ffbj4n_win_uid, ":", ffbj4n_win_pswd, sep = "")
+
+xml <- xmlParse(getURL(Sharepoint_URL, userpwd=ffbj4n_win_uid_pswd))
+aDF <- XML:::xmlAttrsToDataFrame(xmlRoot(xml)[["data"]])
+
+
+#aDFOrd <- aDF[, c("ows_LinkTitle", "ows_Name", "ows__x0050_al2", "ows__x0050_al3", "ows_BU", "ows_Active", "ows_Send_TopDiffs_Email_Flag")]
+aDFOrd <- aDF[, c("ows_LinkTitle", "ows_Name", "ows__x0050_al2", "ows__x0050_al3", "ows_Active", "ows_Send_TopDiffs_Email_Flag")]
+
+
+aDFOrd[,1] <- as.character(aDFOrd[,1])
+aDFOrd[,2] <- as.character(aDFOrd[,2])
+aDFOrd[,3] <- as.character(aDFOrd[,3])
+aDFOrd[,4] <- as.character(aDFOrd[,4])
+aDFOrd[,5] <- as.character(aDFOrd[,5])
+aDFOrd[,6] <- as.character(aDFOrd[,6])
+
+
+colnames(aDFOrd)[1] <- "USERID"
+colnames(aDFOrd)[2] <- "NAME"
+colnames(aDFOrd)[3] <- "PAL2"
+colnames(aDFOrd)[4] <- "PAL3"
+colnames(aDFOrd)[5] <- "ACTIVE"
+colnames(aDFOrd)[6] <- "SEND_TOP_DIFFS_EMAIL"
+
+aDFOrd$BU <- rep(NA,nrow(aDFOrd))
+
+aDFOrd <- aDFOrd[c("USERID", "NAME", "PAL2", "PAL3", "BU", "ACTIVE", "SEND_TOP_DIFFS_EMAIL")]
+
+
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+# End Parse XML file 
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+# Start Insert into table 
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+delStr <- paste("DELETE from DM_RFORECASTING.RR_BU_RESP ", sep="", collapse="") 
+dbSendQuery(con_plan, delStr)
+dbSendQuery(con_plan, "commit")
+
+insStr <- " insert into DM_RFORECASTING.RR_BU_RESP values(:1, :2, :3, :4, :5, :6, :7) "
+dbSendQuery(con_plan, insStr, aDFOrd)
+dbSendQuery(con_plan, "commit")
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+# End Insert into table 
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+
+sqlStr <- paste("SELECT DISTINCT SUBSTR(pal_cd,1,2) AS PAL2,  SUBSTR(pal_cd,1,3) AS PAL3
+  FROM DM_OUTBOUND.APSTORR_PART_ATTR 
+  WHERE LENGTH(pal_cd) >= 3 
+    AND PART_TYPE LIKE 'Ord%' 
+  order by 1, 2", sep="", collapse="") 
+sqlStr <- gsub("\r?\n|\n|\r|\\s+", " ", sqlStr)
+rs2 <- dbSendQuery(con_plan, sqlStr) 
+Pal2Pal3_PP <- fetch(rs2)
+str(Pal2Pal3_PP)
+print("1a")
+
+
+sqlStr <- paste("SELECT DISTINCT substr(PAL3_CD,1,2) as PAL2, PAL3_CD AS PAL3 
+  FROM ONE.PRODUCT_CURRENT 
+  where part_type like 'Ord%' 
+  ORDER BY 1, 2", sep="", collapse="") 
+sqlStr <- gsub("\r?\n|\n|\r|\\s+", " ", sqlStr)
+rs2 <- dbSendQuery(dwprd_con_plan, sqlStr) 
+Pal2Pal3_DWP <- fetch(rs2)
+str(Pal2Pal3_DWP)
+Pal2Pal3 <- rbind(Pal2Pal3_PP, Pal2Pal3_DWP)
+Pal2Pal3 <- Pal2Pal3 %>% 
+  distinct(PAL2, PAL3) %>%
+  arrange(PAL2, PAL3)
+
+str(Pal2Pal3)
+
+print("1b")
+
+
+
+Active_Users <- cbind(aDFOrd)
+Active_Users <- Active_Users %>% 
+  filter(ACTIVE != "N") %>% 
+  select(USERID, PAL2, PAL3)
+
+print("2")
+#Active_Users <- Active_Users[ACTIVE != "N", .(USERID, NAME, PAL2, PAL3, BU)]
+#Active_Users <- aDFOrd %>% 
+#  filter(ACTIVE != "N") %>%
+#  select(USERID, NAME, PAL2, PAL3, BU) 
+
+
+arg_SharePoint = config::get(file=YMLConfigArgsFile, config='SaveSharepointDirs')
+SharePoint_BU_Dir_In = arg_SharePoint$BUIn
+
+Current_File <- paste(SharePoint_BU_Dir_In, "/", "In_BURespFile.txt", sep="", collapse="") 
+write.table(Active_Users, Current_File, na = "", sep="\t", row.names=FALSE, col.names=TRUE, quote = FALSE)
+Sys.chmod(Current_File, mode = "0777", use_umask = TRUE)
+Sys.chmod(Current_File, mode = "0777", use_umask = FALSE)
+
+print("3")
+
+Active_Users_Pal3 <- Active_Users %>% 
+   filter(!is.na(PAL3))
+#Active_Users_Pal3$P3Resp <- rep(1,nrow(Active_Users_Pal3))
+Active_Users_Pal3$Id <- paste(Active_Users_Pal3$USERID, ":", Active_Users_Pal3$PAL2, ":", Active_Users_Pal3$PAL3, sep = "")
+Active_Users_Pal3 <- Active_Users_Pal3 %>% 
+  select(Id, USERID, PAL2, PAL3)  
+Active_Users_Pal3 <- distinct(Active_Users_Pal3)
+
+print("4")
+
+Active_Users_Pal3_Dist_Pal2s <- Active_Users_Pal3 %>% 
+  distinct(USERID, PAL2)
+
+print("5")
+
+Active_Users_Pal2 <- Active_Users %>% 
+  filter(is.na(PAL3)) %>% 
+  select(USERID, PAL2)
+Active_Users_Pal2 <- anti_join(Active_Users_Pal2, Active_Users_Pal3_Dist_Pal2s, by = c("USERID" = "USERID", "PAL2" = "PAL2"))
+
+print("6")
+
+Active_Users_Pal2 <- inner_join(Active_Users_Pal2, Pal2Pal3, by = c("PAL2" = "PAL2"))
+
+Active_Users_Pal2$Id <- paste(Active_Users_Pal2$USERID, ":", Active_Users_Pal2$PAL2, ":", Active_Users_Pal2$PAL3, sep = "")
+
+
+print("7")
+
+Active_Users_Pal2 <- Active_Users_Pal2 %>% 
+  select(Id, USERID, PAL2, PAL3)  
+Active_Users_Pal2 <- distinct(Active_Users_Pal2)
+
+Active_Users_Pal2_Pal3 <- rbind(Active_Users_Pal2, Active_Users_Pal3)
+Active_Users_Pal2_Pal3 <- distinct(Active_Users_Pal2_Pal3)
+Active_Users_Pal2_Pal3 <- Active_Users_Pal2_Pal3 %>% 
+  arrange(Id)
+print("8")
+
+OutEndDirFile <- "/apps/planapp/dst/ftp_data/kinaxis/permissions/Out_BUPermissions.txt"
+
+
+write.table(Active_Users_Pal2_Pal3, OutEndDirFile, na = "", sep="\t", row.names=FALSE, col.names=FALSE, quote = FALSE)
+Sys.chmod(Current_File, mode = "0777", use_umask = TRUE)
+Sys.chmod(Current_File, mode = "0777", use_umask = FALSE)
+
+
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+# Start Run Perl Disaggregating scripts
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+# Comment out as Perl not working
+#tmpText <- system("/apps/planapp/planqa/perl/rr_bu_resp_parser.pl")
+text <- paste("Got to Bottom of program", sep="", collapse="") 
+flog.info(text)
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+# End Run Perl Disaggregating scripts
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+
+
+flog.info(LogFileEndText)
+flog.info("****************************************************************")
+quit(save = "no", status = 0)
+

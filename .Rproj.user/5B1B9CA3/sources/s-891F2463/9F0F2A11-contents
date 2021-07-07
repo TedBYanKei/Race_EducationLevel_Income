@@ -1,0 +1,626 @@
+#!/usr/bin/env Rscript
+`%notin%` <- Negate(`%in%`)
+
+if ("ROracle" %notin% (.packages())) {
+    suppressPackageStartupMessages(library(ROracle))
+    drv <- dbDriver("Oracle")
+    Sys.setenv(TZ='MST')
+    Sys.setenv(ORA_SDTZ='MST')
+    #suppressPackageStartupMessages(library(dplyr)) 
+}
+
+#if (exists("con_dwprd")) { 
+#  #Nothing
+#} else {
+#  con_dwprd <- ConnectToOracleDB('dwprd_ffbj4n')  #con_apsprd 
+#}
+
+
+
+GetLeads <- function(recLeadList) {
+  sqlStr <- paste("SELECT YYYYWW as SS_YYYYWW, ", recLeadList, " as LEAD, LEAD_YYYYWW as SS_LEAD_YYYYWW  
+  FROM (
+    SELECT YYYYWW, 
+    LEAD (YYYYWW,", recLeadList, ") OVER (ORDER BY YYYYWW) AS LEAD_YYYYWW 
+    FROM (
+      SELECT DISTINCT fiscal_yyyywk_num AS YYYYWW
+      FROM ONE.CALENDAR 
+      WHERE calendar_date >= SYSDATE - (365 * 3) 
+      AND calendar_date <= SYSDATE + (365 * 3) 
+      ORDER BY 1) 
+    ORDER BY 1)
+  WHERE LEAD_YYYYWW IS NOT NULL AND YYYYWW IS NOT NULL  ", sep="", collapse="") 
+  sqlStr <- gsub("\r?\n|\n|\r|\\s+", " ", sqlStr)
+  rs2 <- dbSendQuery(con_dwprd, sqlStr)
+  Ret_WW_to_LeadWW <- fetch(rs2)
+  return(Ret_WW_to_LeadWW)
+}
+
+
+
+GetLags <- function(recLagList) {
+  sqlStr <- paste("SELECT YYYYWW as SS_YYYYWW, ", recLagList, " as LAG, LAG_YYYYWW as SS_LAG_YYYYWW  
+  FROM (
+    SELECT YYYYWW, 
+    LAG (YYYYWW,", recLagList, ") OVER (ORDER BY YYYYWW) AS LAG_YYYYWW 
+    FROM (
+      SELECT DISTINCT fiscal_yyyywk_num AS YYYYWW
+      FROM ONE.CALENDAR 
+      WHERE calendar_date >= SYSDATE - (365 * 3) 
+      AND calendar_date <= SYSDATE + (365 * 3) 
+      ORDER BY 1) 
+    ORDER BY 1)
+  WHERE LAG_YYYYWW IS NOT NULL AND YYYYWW IS NOT NULL  ", sep="", collapse="") 
+  sqlStr <- gsub("\r?\n|\n|\r|\\s+", " ", sqlStr)
+  rs2 <- dbSendQuery(con_dwprd, sqlStr)
+  Ret_WW_to_LagWW <- fetch(rs2)
+  return(Ret_WW_to_LagWW)
+}
+
+
+
+GetLag1 <- function() {
+  sqlStr <- paste("SELECT YYYYWW as SS_YYYYWW, -1 as LEAD, LEAD_YYYYWW as SS_LEAD_YYYYWW  
+  FROM (
+    SELECT YYYYWW, 
+    LAG (YYYYWW,1) OVER (ORDER BY YYYYWW) AS LEAD_YYYYWW 
+    FROM (
+      SELECT DISTINCT fiscal_yyyywk_num AS YYYYWW
+      FROM ONE.CALENDAR 
+      WHERE calendar_date >= SYSDATE - (365 * 3) 
+      AND calendar_date <= SYSDATE + (365 * 3) 
+      ORDER BY 1) 
+    ORDER BY 1)
+  WHERE LEAD_YYYYWW IS NOT NULL AND YYYYWW IS NOT NULL  ", sep="", collapse="") 
+  sqlStr <- gsub("\r?\n|\n|\r|\\s+", " ", sqlStr)
+  rs2 <- dbSendQuery(con_dwprd, sqlStr)
+  Ret_Lag1 <- fetch(rs2)
+  return(Ret_Lag1)
+}
+
+
+GetYw_to_prior_Yw <- function() {
+  sqlStr <- paste("SELECT YYYYWW as SS_YYYYWW, PREV_YYYYWW as SS_PREV_YYYYWW  
+  FROM (
+    SELECT YYYYWW, 
+    LAG (YYYYWW,1) OVER (ORDER BY YYYYWW) AS prev_YYYYWW 
+    FROM (
+      SELECT DISTINCT fiscal_yyyywk_num AS YYYYWW
+      FROM ONE.CALENDAR 
+      WHERE calendar_date >= SYSDATE - (365 * 3) 
+      AND calendar_date <= SYSDATE + (365 * 3) 
+      ORDER BY 1) 
+    ORDER BY 1)
+  WHERE PREV_YYYYWW IS NOT NULL AND YYYYWW IS NOT NULL ", sep="", collapse="") 
+  sqlStr <- gsub("\r?\n|\n|\r|\\s+", " ", sqlStr)
+  rs2 <- dbSendQuery(con_dwprd, sqlStr)
+  ret_WW_to_PriorWW <- as.data.table(fetch(rs2))
+  return(ret_WW_to_PriorWW)
+}
+
+GetLastWk <- function() {
+  sqlStr <- paste("SELECT YYYYWW FROM 
+    (SELECT YYYYWW, ROWNUM -1 AS RCNT 
+       FROM (select DISTINCT fiscal_yyyywk_num as YYYYWW  
+               from one.calendar 
+               where calendar_date <= sysdate and calendar_date >= sysdate - 30
+               ORDER BY 1 DESC) 
+       ORDER BY 1 DESC) 
+    WHERE RCNT IN (1) 
+    ORDER BY 1 DESC", sep="", collapse="") 
+  sqlStr <- gsub("\r?\n|\n|\r|\\s+", " ", sqlStr)
+  rs2 <- dbSendQuery(con_dwprd, sqlStr)
+  BklgSSWks <- fetch(rs2)
+  intRet_LastWk <- as.integer(BklgSSWks[1,1])
+  return(intRet_LastWk)
+}
+
+
+GetLTs <- function(recYw) {
+  sqlStr <- paste(" 
+  SELECT l.part_id, MAX(NVL(l.LEAD_TIME,99)) AS LEADTIME_WKS 
+  FROM (SELECT lt.PART_ID, 
+               CASE 
+                 WHEN lt.TBOT_LT > 0 THEN ROUND((lt.TBOT_LT / 7),1)
+                 WHEN lt.OVERRIDE_LT > 0 THEN ROUND((lt.OVERRIDE_LT / 7),1)
+                 WHEN lt.TREND_LT > 0 THEN ROUND((lt.TREND_LT / 7),1)
+                 WHEN lt.POINT_LT > 0 THEN ROUND((lt.POINT_LT / 7),1)
+                 WHEN lt.FAMILY_LT > 0 THEN ROUND((lt.FAMILY_LT / 7),1) 
+               ELSE 52 END AS LEAD_TIME, lt.BUCKET_SEQ 
+          FROM APS_OWNER.LT_HISTORY_DETAIL_ALL lt
+          ORDER BY lt.PART_ID, lt.UPDATE_DT DESC) l, 
+        DM_OUTBOUND.APSTORR_PART_ATTR p, 
+       (SELECT YYYYWW, (ROWNUM - 1) * -1 AS RCNT 
+          FROM (SELECT DISTINCT fiscal_yyyywk_num AS YYYYWW 
+                  FROM LOADER.FISCAL_CALENDAR 
+                  WHERE QUERY_DT >= SYSDATE - (366 * 3) 
+                    AND QUERY_DT <= SYSDATE 
+                  ORDER BY fiscal_yyyywk_num DESC )
+          ORDER BY YYYYWW DESC) f
+  WHERE l.BUCKET_SEQ = f.rcnt 
+    AND l.part_id = p.item 
+    AND p.part_type LIKE 'Ord%' 
+    AND f.YYYYWW = ", recYw, " 
+  GROUP BY l.part_id 
+  ORDER BY l.part_id ", sep="", collapse="") 
+  #AND p.BU = 'ASG' 
+  sqlStr <- gsub("\r?\n|\n|\r|\\s+", " ", sqlStr)
+  rs2 <- dbSendQuery(con_plan_dm_view, sqlStr)
+  retLTData <- fetch(rs2)
+  return(retLTData)
+}
+
+GetMostRecent_WL_DataWk <- function() {
+  #Get data from the prior week 
+  sqlStr <- paste(" SELECT SNAP_SHOT_YYYYWW, PRODUCT_LEVEL_VAL, CUST_LEVEL_VAL, DMD_YYYYWW, 
+  CASE WHEN SNAP_SHOT_YYYYWW = DMD_YYYYWW THEN 0 ELSE NVL(CUML_REVISED_WATERLINE_QTY,0) END AS CUML_REVISED_WATERLINE_QTY 
+  FROM DM_RFORECASTING.HYB_WATERLINE 
+  WHERE SNAP_SHOT_YYYYWW = (SELECT MAX(SNAP_SHOT_YYYYWW) FROM DM_RFORECASTING.HYB_WATERLINE) 
+  AND PRODUCT_LEVEL_DEF = 'PART_ID' 
+  AND CUST_LEVEL_DEF = 'CORP' 
+  AND TIME_TYPE = 'CRSD' 
+  AND DMD_YYYYWW >= SNAP_SHOT_YYYYWW   
+  ORDER BY SNAP_SHOT_YYYYWW, PRODUCT_LEVEL_VAL, CUST_LEVEL_VAL, DMD_YYYYWW ", sep="", collapse="") 
+  sqlStr <- gsub("\r?\n|\n|\r|\\s+", " ", sqlStr)
+  rs2 <- dbSendQuery(con_plan_dm_view, sqlStr)
+  retWaterLinePriorWk <- fetch(rs2)
+  return(retWaterLinePriorWk)
+}
+
+GetWeekOfBilling <- function(recYw) {
+  sqlStr <- paste("SELECT Product_ID AS PART_ID, DIRCorp_CD as DIR_CORP, YYYYWK AS BILL_YYYYWW, 
+    SUM(Billing_QTY) AS BILL_QTY  
+  FROM dn_Billing 
+  WHERE YYYYWK = ", recYw, "  
+    AND DIRCust_BusinessClass NOT IN ('INT-SPS','OMD') 
+    AND TRUE_BILL_FLG = 1 
+  GROUP BY Product_ID, DIRCorp_CD, YYYYWK", sep="", collapse="") 
+  sqlStr <- gsub("\r?\n|\n|\r|\\s+", " ", sqlStr)
+  Ret_a_Week_of_SDM_Bill <- as.data.table(sqlQuery(con_SDM, sqlStr))
+  Ret_a_Week_of_SDM_Bill$PART_ID <- as.character(Ret_a_Week_of_SDM_Bill$PART_ID)
+  Ret_a_Week_of_SDM_Bill$DIR_CORP <- as.character(Ret_a_Week_of_SDM_Bill$DIR_CORP)
+  str(Ret_a_Week_of_SDM_Bill)
+  
+  #sqlStr <- paste("SELECT ITEM AS PART_ID
+  #FROM DM_OUTBOUND.APSTORR_PART_ATTR 
+  #WHERE BU = 'ASG' 
+  #  AND part_type LIKE 'Ord%' ", sep="", collapse="") 
+  #sqlStr <- gsub("\r?\n|\n|\r|\\s+", " ", sqlStr)
+  #rs2 <- dbSendQuery(con_plan_dm_view, sqlStr)
+  #ASG_Parts <- as.data.table(fetch(rs2))
+  #Ret_a_Week_of_SDM_Bill <- merge(Ret_a_Week_of_SDM_Bill,ASG_Parts, by.x = "PART_ID", by.y = "PART_ID")
+  #str(Ret_a_Week_of_SDM_Bill)
+  
+  return(Ret_a_Week_of_SDM_Bill)
+}
+
+
+GetBklg <- function(recYYYYWW) {
+  sqlStr <- paste("select ", recYYYYWW, " as SS_YYYYWW, b.Product_ID as PART_ID, 
+                  dircorp.CORP_Cd as DIR_CORP, 
+                  crsdwk.YYYYWK as YYYYWW, 
+                  SUM(b.Backlog_QTY) as BKLG_QTY 
+                  from vw_BacklogWeeklyBySchedule b 
+                  JOIN dbo.lkp_Corporations dircorp ON b.key_DirCorporation = dircorp.key_Corporation 
+                  JOIN dbo.lkp_CalendarWeek crsdwk ON b.key_CRSDWeek = crsdwk.key_CalendarWeek 
+                  JOIN vw_Customers dircust ON b.key_DIRCustomer = dircust.key_Customer
+                  where b.SnapshotYYYYWK = ",  recYYYYWW, " 
+                  AND b.Backlog_QTY IS NOT NULL  
+                  AND dircust.Business_Class_Cd NOT IN ('INT-SPS','OMD') 
+                  GROUP BY b.Product_ID, dircorp.CORP_Cd, crsdwk.YYYYWK ", sep="", collapse="") 
+  #AND (b.Product_ID LIKE 'NCP1%' OR b.Product_ID LIKE 'NCV7051%' OR b.Product_ID LIKE 'NCV751%') 
+  #print(sqlStr)
+  sqlStr <- gsub("\r?\n|\n|\r|\\s+", " ", sqlStr)
+  tmp_Bklg <- as.data.table(sqlQuery(con_SDM, sqlStr))
+  tmp_Bklg$BKLG_QTY <- as.integer(tmp_Bklg$BKLG_QTY)
+  tmp_Bklg$BKLG_QTY <- round((tmp_Bklg$BKLG_QTY), digits = 0)
+  tmp_Bklg$PART_ID <- as.character(tmp_Bklg$PART_ID)
+  tmp_Bklg$DIR_CORP <- as.character(tmp_Bklg$DIR_CORP)
+  tmp_Bklg$YYYYWW <- with(tmp_Bklg, ifelse(YYYYWW < SS_YYYYWW, SS_YYYYWW, YYYYWW))
+  tmp_Bklg <- merge(tmp_Bklg, WW_to_LeadWW, by.x = "SS_YYYYWW", by.y = "SS_YYYYWW")
+  #Only go out 52 weeks
+  tmp_Bklg <- tmp_Bklg[YYYYWW <= SS_LEAD_YYYYWW, .(BKLG_QTY = base::sum(BKLG_QTY)),by = .(SS_YYYYWW, PART_ID, DIR_CORP, YYYYWW)]
+  
+  
+  #str(tmp_Bklg)
+  #sqlStr <- paste("SELECT ITEM AS PART_ID
+  #                FROM DM_OUTBOUND.APSTORR_PART_ATTR 
+  #                WHERE BU = 'ASG' 
+  #                AND part_type LIKE 'Ord%' ", sep="", collapse="") 
+  #sqlStr <- gsub("\r?\n|\n|\r|\\s+", " ", sqlStr)
+  #rs2 <- dbSendQuery(con_plan_dm_view, sqlStr)
+  #ASG_Parts <- as.data.table(fetch(rs2))
+  #tmp_Bklg <- merge(tmp_Bklg,ASG_Parts, by.x = "PART_ID", by.y = "PART_ID")
+  #str(tmp_Bklg)
+  
+  #print(recYYYYWW)
+  #print(tmp_Bklg)
+  return(tmp_Bklg)
+}
+
+DeleteWeekGonnaInsert <- function(recYYYYWW) {
+  delStr <- paste("DELETE from DM_RFORECASTING.HYB_WATERLINE WHERE SNAP_SHOT_YYYYWW = ", recYYYYWW, " ", sep="", collapse="") 
+  dbSendQuery(con_plan_ins, delStr)
+  dbSendQuery(con_plan_ins, "commit")
+}
+
+InsertAWeek_AllColumns <- function(recInsDF) {
+  insStr <- " insert into DM_RFORECASTING.HYB_WATERLINE (SNAP_SHOT_YYYYWW, DMD_WKS_OUT, DMD_YYYYWW, PRODUCT_LEVEL_DEF, PRODUCT_LEVEL_VAL, CUST_LEVEL_DEF, CUST_LEVEL_VAL, TIME_TYPE, DMD_QTY, CUML_DMD_QTY, CUML_PRIORWK_WATERLINE_QTY, CUML_REVISED_WATERLINE_QTY, WK_WATERLINE_QTY, LEADTIME_APPROPRIATE_QTY, LEADTIME_WKS, RECORD_DTTM, LEADTIME_VIOLOATION_QTY, PRIOR_WK_SHIPMENTS_WK0) 
+    values(:1, :2, :3, :4, :5, :6, :7, :8, :9, :10, :11, :12, :13, :14, :15, TO_DATE(:16, 'YYYY-MM-DD HH24:MI:SS'), :17, :18) "
+  dbSendQuery(con_plan_ins, insStr, recInsDF)
+  dbSendQuery(con_plan_ins, "commit")
+}
+
+InsertAWeek <- function(recInsDF) {
+  insStr <- " insert into DM_RFORECASTING.HYB_WATERLINE (SNAP_SHOT_YYYYWW, DMD_WKS_OUT, DMD_YYYYWW, PRODUCT_LEVEL_DEF, PRODUCT_LEVEL_VAL, 
+  CUST_LEVEL_DEF, CUST_LEVEL_VAL, TIME_TYPE, DMD_QTY, CUML_DMD_QTY, LEADTIME_WKS, RECORD_DTTM) values(:1, :2, :3, :4, :5, :6, :7, :8, :9, :10, :11, TO_DATE(:12, 'YYYYMMDD HH24:MI:SS')) "
+  dbSendQuery(con_plan_ins, insStr, recInsDF)
+  dbSendQuery(con_plan_ins, "commit")
+}
+
+
+
+DeleteAggr <- function() {
+  delStr <- paste("DELETE from DM_RFORECASTING.HYB_WATERLINE_AGGR ", sep="", collapse="") 
+  dbSendQuery(con_plan_ins, delStr)
+  dbSendQuery(con_plan_ins, "commit")
+}
+
+
+InsertAggr <- function(recInsDF) {
+  sqlStr <- paste("SELECT h.snap_shot_yyyyww, h.DMD_WKS_OUT, h.DMD_YYYYWW, p.BU, p.DIVISION, 
+    p.PTI2 AS PAL2, h.cust_level_val as CORP, 
+    SUM(NVL(h.DMD_QTY,0)) AS DMD_QTY, 
+    SUM(NVL(h.CUML_DMD_QTY,0)) AS CUML_DMD_QTY, 
+    SUM(NVL(h.LEADTIME_APPROPRIATE_QTY,0)) AS LEADTIME_APPROPRIATE_QTY, 
+    SUM(NVL(h.LEADTIME_VIOLOATION_QTY,0)) AS LEADTIME_VIOLATION_QTY 
+  FROM DM_RFORECASTING.HYB_WATERLINE h, DM_OUTBOUND.APSTORR_PART_ATTR p
+  WHERE h.product_level_val = p.item 
+    AND p.part_type LIKE 'Ord%' AND p.bu NOT IN ('ONS') 
+    AND p.bu IS NOT NULL AND p.division IS NOT NULL 
+    AND p.PTI2 IS NOT NULL AND h.cust_level_val IS NOT NULL 
+  GROUP BY h.snap_shot_yyyyww, h.DMD_WKS_OUT, h.DMD_YYYYWW, p.BU, p.DIVISION, p.PTI2, h.cust_level_val 
+  ORDER BY p.BU, p.DIVISION, p.PTI2, h.cust_level_val, h.snap_shot_yyyyww, h.DMD_WKS_OUT, h.DMD_YYYYWW", sep="", collapse="") 
+  sqlStr <- gsub("\r?\n|\n|\r|\\s+", " ", sqlStr)
+  rs2 <- dbSendQuery(con_plan_dm_view, sqlStr)
+  insAggr <- fetch(rs2)
+  insStr <- " insert into DM_RFORECASTING.HYB_WATERLINE_AGGR (SNAP_SHOT_YYYYWW, DMD_WKS_OUT, DMD_YYYYWW, BU, DIVISION, PAL2, CORP, DMD_QTY, CUML_DMD_QTY, LEADTIME_APPROPRIATE_QTY, LEADTIME_VIOLATION_QTY) 
+    values(:1, :2, :3, :4, :5, :6, :7, :8, :9, :10, :11) "
+  dbSendQuery(con_plan_ins, insStr, insAggr)
+  dbSendQuery(con_plan_ins, "commit")
+}
+
+
+DeleteDistinctValues <- function() {
+  delStr <- paste("DELETE from DM_RFORECASTING.HYB_WATERLINE_DV_ATTRS ", sep="", collapse="") 
+  dbSendQuery(con_plan_ins, delStr)
+  dbSendQuery(con_plan_ins, "commit")
+  
+  delStr <- paste("DELETE from DM_RFORECASTING.HYB_WATERLINE_DV_SSS ", sep="", collapse="") 
+  dbSendQuery(con_plan_ins, delStr)
+  dbSendQuery(con_plan_ins, "commit")
+}
+
+InsertDistinctValues <- function(recInsDF) {
+  sqlStr <- paste("SELECT distinct p.BU, p.DIVISION, p.PTI2 AS PAL2, h.cust_level_val as CORP   
+  FROM DM_RFORECASTING.HYB_WATERLINE h, DM_OUTBOUND.APSTORR_PART_ATTR p
+  WHERE h.product_level_val = p.item 
+    AND p.part_type LIKE 'Ord%' AND p.bu NOT IN ('ONS') 
+    AND p.bu IS NOT NULL AND p.division IS NOT NULL 
+    AND p.PTI2 IS NOT NULL AND h.cust_level_val IS NOT NULL 
+  ORDER BY p.BU, p.DIVISION, p.PTI2, h.cust_level_val", sep="", collapse="") 
+  sqlStr <- gsub("\r?\n|\n|\r|\\s+", " ", sqlStr)
+  rs2 <- dbSendQuery(con_plan_dm_view, sqlStr)
+  insDVs <- fetch(rs2)
+  CurrYMDHMS <-format(Sys.time(), "%Y%m%d %H:%M:%S")
+  insDVs$RECORD_DTTM <- rep(CurrYMDHMS,nrow(insDVs)) # make new column 
+  insStr <- " insert into DM_RFORECASTING.HYB_WATERLINE_DV_ATTRS (BU, DIVISION, PAL2, CORP, RECORD_DTTM) values(:1, :2, :3, :4, TO_DATE(:5, 'YYYYMMDD HH24:MI:SS')) "
+  dbSendQuery(con_plan_ins, insStr, insDVs)
+  dbSendQuery(con_plan_ins, "commit")
+  
+  sqlStr <- paste("SELECT distinct h.snap_shot_yyyyww
+  FROM DM_RFORECASTING.HYB_WATERLINE h 
+  WHERE snap_shot_yyyyww IS NOT NULL 
+  ORDER BY snap_shot_yyyyww", sep="", collapse="") 
+  sqlStr <- gsub("\r?\n|\n|\r|\\s+", " ", sqlStr)
+  rs2 <- dbSendQuery(con_plan_dm_view, sqlStr)
+  insDVSSs <- fetch(rs2)
+  CurrYMDHMS <-format(Sys.time(), "%Y%m%d %H:%M:%S")
+  insDVSSs$RECORD_DTTM <- rep(CurrYMDHMS,nrow(insDVSSs)) # make new column 
+  insStr <- " insert into DM_RFORECASTING.HYB_WATERLINE_DV_SSS (SNAP_SHOT_YYYYWW, RECORD_DTTM) values(:1, TO_DATE(:2, 'YYYYMMDD HH24:MI:SS')) "
+  dbSendQuery(con_plan_ins, insStr, insDVSSs)
+  dbSendQuery(con_plan_ins, "commit")
+}
+
+
+GetPriorTwoWLWks <- function() {
+  #Get data from prior week, and then current week:
+  sqlStr <- paste(" SELECT DISTINCT SNAP_SHOT_YYYYWW 
+    FROM DM_RFORECASTING.HYB_WATERLINE 
+    WHERE SNAP_SHOT_YYYYWW IS NOT NULL 
+    AND PRODUCT_LEVEL_DEF = 'PART_ID' 
+    AND CUST_LEVEL_DEF = 'CORP' 
+    AND TIME_TYPE = 'CRSD'   
+    ORDER BY SNAP_SHOT_YYYYWW DESC ", sep="", collapse="") 
+  sqlStr <- gsub("\r?\n|\n|\r|\\s+", " ", sqlStr)
+  rs2 <- dbSendQuery(con_plan_dm_view, sqlStr)
+  ret_ssYYYYWWs_Ordered <- fetch(rs2)
+  return(ret_ssYYYYWWs_Ordered)
+}
+
+
+GetPriorWk_WL_Data <- function(recYW) {
+  #sqlStr <- paste("SELECT PRODUCT_LEVEL_VAL, CUST_LEVEL_VAL, DMD_YYYYWW, DMD_QTY AS WK_WATERLINE_QTY
+  #  FROM DM_RFORECASTING.HYB_WATERLINE 
+  #  WHERE SNAP_SHOT_YYYYWW = ", recYW, " 
+  #    AND DMD_WKS_OUT >= 0 
+  #  AND PRODUCT_LEVEL_DEF = 'PART_ID' 
+  #  AND CUST_LEVEL_DEF = 'CORP' 
+  #  AND TIME_TYPE = 'CRSD'   
+  #  ORDER BY 1, 2, 3 ", sep="", collapse="") 
+  #sqlStr <- gsub("\r?\n|\n|\r|\\s+", " ", sqlStr)
+  #rs2 <- dbSendQuery(con_plan_dm_view, sqlStr)
+  #ret_DF <- as.data.table(fetch(rs2))
+  #
+  #PriorWkCuml <- ret_DF %>% 
+  #  group_by(PRODUCT_LEVEL_VAL, CUST_LEVEL_VAL) %>% 
+  #  mutate(PW_WK_WATERLINE_QTY_Cuml_Pre = cumsum(WK_WATERLINE_QTY)) %>% 
+  #  group_by(PRODUCT_LEVEL_VAL, CUST_LEVEL_VAL, DMD_YYYYWW) %>% 
+  #  summarise(PW_WK_WATERLINE_QTY_Cuml = max(PW_WK_WATERLINE_QTY_Cuml_Pre))
+  #PriorWkCuml <- as.data.table(distinct(PriorWkCuml))
+  #ret_DF <- merge(ret_DF, PriorWkCuml, by.x = c("PRODUCT_LEVEL_VAL", "CUST_LEVEL_VAL", "DMD_YYYYWW"), by.y = c("PRODUCT_LEVEL_VAL", "CUST_LEVEL_VAL", "DMD_YYYYWW"), all.x = TRUE)
+  #rm(PriorWkCuml)
+  #ret_DF$WK_WATERLINE_QTY <- NULL
+  
+  sqlStr <- paste("SELECT PRODUCT_LEVEL_VAL, CUST_LEVEL_VAL, DMD_YYYYWW, CUML_REVISED_WATERLINE_QTY 
+    FROM DM_RFORECASTING.HYB_WATERLINE 
+                  WHERE SNAP_SHOT_YYYYWW = ", recYW, " 
+                  AND DMD_WKS_OUT >= 0 
+                  AND PRODUCT_LEVEL_DEF = 'PART_ID' 
+                  AND CUST_LEVEL_DEF = 'CORP' 
+                  AND TIME_TYPE = 'CRSD'   
+                  ORDER BY 1, 2, 3 ", sep="", collapse="") 
+  sqlStr <- gsub("\r?\n|\n|\r|\\s+", " ", sqlStr)
+  #str(sqlStr)
+  print(sqlStr)
+  rs2 <- dbSendQuery(con_plan_dm_view, sqlStr)
+  ret_DF <- as.data.table(fetch(rs2))
+  colnames(ret_DF)[colnames(ret_DF)=="CUML_REVISED_WATERLINE_QTY"] <- "PW_WK_WATERLINE_QTY_Cuml"
+  
+  return(ret_DF)
+}
+
+GetPriorWkShipments <- function(recCurrWk) {
+  sqlStr <- paste("
+  SELECT PRODUCT_LEVEL_VAL, CUST_LEVEL_VAL, DMD_QTY AS CURRWK_PW_SHIPS
+  FROM DM_RFORECASTING.HYB_WATERLINE 
+  WHERE SNAP_SHOT_YYYYWW = ", recCurrWk, "     
+    AND DMD_WKS_OUT = -1 
+    AND PRODUCT_LEVEL_DEF = 'PART_ID' 
+    AND CUST_LEVEL_DEF = 'CORP' 
+    AND TIME_TYPE = 'CRSD' 
+    AND DMD_QTY > 0", sep="", collapse="") 
+  sqlStr <- gsub("\r?\n|\n|\r|\\s+", " ", sqlStr)
+  rs2 <- dbSendQuery(con_plan_dm_view, sqlStr)
+  GPWS_PriorWkShips <- as.data.table(fetch(rs2))
+  GPWS_PriorWkShips$PC <- paste(GPWS_PriorWkShips$PRODUCT_LEVEL_VAL, "|", GPWS_PriorWkShips$CUST_LEVEL_VAL, sep = "")
+  GPWS_PriorWkShips$PRODUCT_LEVEL_VAL <- NULL
+  GPWS_PriorWkShips$CUST_LEVEL_VAL <- NULL
+  setkey(GPWS_PriorWkShips, PC)
+  return(GPWS_PriorWkShips)
+}
+
+GetOverUnderBillQtys_WkZero <- function(recPriorWk, recCurrWk) {
+  #Get cases where shipments from the prior week exceeded the CRSD Bklg at the start of that prior week
+  sqlStr <- paste("
+  SELECT PRODUCT_LEVEL_VAL, CUST_LEVEL_VAL, 
+    CURRWK_PW_SHIPS - PRIORWK_BKLG_WK0 AS OVERSHIP_QTY  
+    FROM (
+      SELECT PRODUCT_LEVEL_VAL, CUST_LEVEL_VAL, 
+        SUM(PRIORWK_BKLG_WK0) AS PRIORWK_BKLG_WK0, 
+        SUM(CURRWK_PW_SHIPS) AS CURRWK_PW_SHIPS
+      FROM (   
+        SELECT PRODUCT_LEVEL_VAL, CUST_LEVEL_VAL, DMD_QTY AS PRIORWK_BKLG_WK0, 0 AS CURRWK_PW_SHIPS
+            FROM DM_RFORECASTING.HYB_WATERLINE 
+            WHERE SNAP_SHOT_YYYYWW = ", recPriorWk, "   
+              AND DMD_WKS_OUT = 0 
+              AND PRODUCT_LEVEL_DEF = 'PART_ID' 
+              AND CUST_LEVEL_DEF = 'CORP' 
+              AND TIME_TYPE = 'CRSD'   
+        UNION 
+        SELECT PRODUCT_LEVEL_VAL, CUST_LEVEL_VAL, 0 AS PRIORWK_BKLG_WK0, DMD_QTY AS CURRWK_PW_SHIPS
+            FROM DM_RFORECASTING.HYB_WATERLINE 
+            WHERE SNAP_SHOT_YYYYWW = ", recCurrWk, "     
+              AND DMD_WKS_OUT = -1 
+              AND PRODUCT_LEVEL_DEF = 'PART_ID' 
+              AND CUST_LEVEL_DEF = 'CORP' 
+              AND TIME_TYPE = 'CRSD')
+    GROUP BY PRODUCT_LEVEL_VAL, CUST_LEVEL_VAL)
+  WHERE CURRWK_PW_SHIPS - PRIORWK_BKLG_WK0 <> 0 ", sep="", collapse="") 
+  sqlStr <- gsub("\r?\n|\n|\r|\\s+", " ", sqlStr)
+  rs2 <- dbSendQuery(con_plan_dm_view, sqlStr)
+  GOB_OverShips <- as.data.table(fetch(rs2))
+  
+  GOB_OverShips$PC <- paste(GOB_OverShips$PRODUCT_LEVEL_VAL, "|", GOB_OverShips$CUST_LEVEL_VAL, sep = "")
+  GOB_OverShips$PRODUCT_LEVEL_VAL <- NULL
+  GOB_OverShips$CUST_LEVEL_VAL <- NULL
+  setkey(GOB_OverShips, PC)
+  return(GOB_OverShips)
+}
+
+GetCurrentWk_WL_Data <- function(recYW) {
+  sqlStr <- paste("SELECT  DMD_WKS_OUT, PRODUCT_LEVEL_VAL, CUST_LEVEL_VAL, DMD_YYYYWW, 
+      CASE WHEN DMD_WKS_OUT = -1 THEN 0 ELSE DMD_QTY END AS DMD_QTY, 
+      CUML_DMD_QTY, LEADTIME_WKS 
+    FROM DM_RFORECASTING.HYB_WATERLINE 
+    WHERE SNAP_SHOT_YYYYWW = ", recYW, " 
+      AND DMD_WKS_OUT >= -1 
+      AND PRODUCT_LEVEL_DEF = 'PART_ID' 
+      AND CUST_LEVEL_DEF = 'CORP' 
+      AND TIME_TYPE = 'CRSD'   
+    ORDER BY 1, 2, 3 ", sep="", collapse="") 
+  sqlStr <- gsub("\r?\n|\n|\r|\\s+", " ", sqlStr)
+  rs2 <- dbSendQuery(con_plan_dm_view, sqlStr)
+  ret_DF <- as.data.table(fetch(rs2))
+  
+  return(ret_DF)
+}
+
+
+
+#Used by WL_RD_Upd.r
+funcGetLTQty <- function(recPartCustList) {
+  aPartCustDT <- CurrWkPWk[PC == recPartCustList]
+  printPart <- "21433-002-XDS"
+  printCorp <- "ARPT"
+  #str(aPartCustDT)
+  #vec_Leadtime_Appr_Qty <- vector(mode="numeric")
+  vec_Leadtime_Appr_Qty <- vector(mode="numeric")
+  vec_Leadtime_Violation_Qty <- vector(mode="numeric")
+  vec_PriorWk_Ship_Qty <- vector(mode="numeric")
+  vec_Cuml_Revs_Wtrl_Qty_minus_OverBill <- vector(mode="numeric")
+  #vec_Leadtime_Appr_Qty <- c(vec_Leadtime_Appr_Qty, 0)
+  a_Leadtime_Appr_Qty_Cuml <- 0
+  a_OverBill_Qty <- 0
+  a_CUML_REVISED_WATERLINE_QTY_minus_OverBill <- 0
+  cnter <- -1
+  for (row in 1:nrow(aPartCustDT)) {
+    cnter <- cnter + 1
+    if (cnter == 0) {
+      vec_Leadtime_Appr_Qty <- c(vec_Leadtime_Appr_Qty, 0)
+      vec_Leadtime_Violation_Qty <- c(vec_Leadtime_Violation_Qty, 0)
+      vec_PriorWk_Ship_Qty <- c(vec_PriorWk_Ship_Qty, 0)
+      vec_Cuml_Revs_Wtrl_Qty_minus_OverBill <- c(vec_Cuml_Revs_Wtrl_Qty_minus_OverBill, 0)
+      
+      #aPartCustDT$LeadTime_Appropriate_Qty <- vec_Leadtime_Appr_Qty
+      #aPartCustDT$LeadTime_Violation_Qty <- vec_Leadtime_Violation_Qty
+      #aPartCustDT$Prior_Wk_Ship_Qty <- vec_PriorWk_Ship_Qty
+      #aPartCustDT$Cuml_Revs_Wtrl_Qty_minus_OverBill <- vec_Cuml_Revs_Wtrl_Qty_minus_OverBill  #CUML_REVISED_WATERLINE_QTY_MOB
+    } else {
+      a_PriorWkShip_Qty <- 0
+      a_DMD_QTY <- aPartCustDT[row, DMD_QTY]
+      a_Part <- aPartCustDT[row, PRODUCT_LEVEL_VAL]
+      a_Corp <- aPartCustDT[row, CUST_LEVEL_VAL]
+      a_WksOut <- aPartCustDT[row, DMD_WKS_OUT]
+      a_PartCorp <- paste(a_Part, "|", a_Corp, sep = "")
+      if (cnter > 1) {
+        a_PriorWkShip_Qty <- 0
+      } else {
+        a_OverBill_Qty <- as.integer((OverUnderBills[PC == a_PartCorp,])[1,1])  #Get/Bring in the overshipped Billing in first week (week zero) only
+        if (is.na(a_OverBill_Qty)) { #Just to be safe
+          a_OverBill_Qty <- 0
+        }
+        a_PriorWkShip_Qty <- as.integer((PriorWkShipments[PC == a_PartCorp,])[1,1])  #Do this for the first week (week zero) only
+      }
+      if (is.na(a_PriorWkShip_Qty) | a_PriorWkShip_Qty < 0) { #Just to be safe
+        a_PriorWkShip_Qty <- 0
+      }
+      
+      a_CUML_REVISED_WATERLINE_QTY <- aPartCustDT[row, CUML_REVISED_WATERLINE_QTY]
+      
+      #Here I am creating a new column which nets down the vector vec_Cuml_Revs_Wtrl_Qty_minus_OverBill by 
+      #  the single integer value a_OverBill_Qty, and reduce a_OverBill_Qty as we go
+      if (a_OverBill_Qty >= 0) {
+        if (a_CUML_REVISED_WATERLINE_QTY >= a_OverBill_Qty) {
+          a_CUML_REVISED_WATERLINE_QTY_minus_OverBill <- a_CUML_REVISED_WATERLINE_QTY_minus_OverBill - a_OverBill_Qty
+          a_OverBill_Qty <- 0
+        } else {
+          a_CUML_REVISED_WATERLINE_QTY_minus_OverBill <- 0
+          a_OverBill_Qty <- a_OverBill_Qty - a_CUML_REVISED_WATERLINE_QTY_minus_OverBill
+        }
+      } else {
+        
+      }
+      vec_Cuml_Revs_Wtrl_Qty_minus_OverBill <- c(vec_Cuml_Revs_Wtrl_Qty_minus_OverBill, a_CUML_REVISED_WATERLINE_QTY_minus_OverBill)
+      
+      if (cnter >= 1) {  #I changed this from cnter > 1 to cnter >= 1 on 2020-01-06
+        #a_Leadtime_Appr_Qty <- a_CUML_REVISED_WATERLINE_QTY_minus_OverBill
+        #if (a_Leadtime_Appr_Qty > a_DMD_QTY) {
+        #  a_Leadtime_Appr_Qty <- a_DMD_QTY
+        #}
+        #a_Leadtime_Appr_Qty_Cuml <- a_Leadtime_Appr_Qty_Cuml + a_Leadtime_Appr_Qty
+        #=MIN(a_DMD_QTY,(a_CUML_REVISED_WATERLINE_QTY - Vector up to this point))
+        a_Prev_LeadtimeApprQty = as.integer(sum(unlist(vec_Leadtime_Appr_Qty)))  #This is the sum of prior weeks
+        a_Prev_LeadtimeViolQty = as.integer(sum(unlist(vec_Leadtime_Violation_Qty))) #This is the sum of prior weeks
+        #I just commented this out as we agreed the formula should be against only the LeadtimeApprQty (and not adding together a_Prev_LeadtimeApprQty and a_Prev_LeadtimeViolQty)
+        #a_Prev_Leadtime_ApprViol_Comb_Qty <- a_Prev_LeadtimeApprQty + a_Prev_LeadtimeViolQty
+        a_Prev_Leadtime_ApprViol_Comb_Qty <- a_Prev_LeadtimeApprQty
+        
+        a_CumlRevWtrlQty_Minus_PrevCombQty <- ifelse(a_CUML_REVISED_WATERLINE_QTY - a_Prev_Leadtime_ApprViol_Comb_Qty < 0, 0, a_CUML_REVISED_WATERLINE_QTY - a_Prev_Leadtime_ApprViol_Comb_Qty)
+        
+        if (a_Part == printPart & a_Corp == printCorp) {
+          stuff <- paste(cnter, "|20|", a_Part, "|", a_Corp, "|", a_WksOut, "  a_CumlRevWtrlQty_Minus_PrevCombQty: ", a_CumlRevWtrlQty_Minus_PrevCombQty, "   a_Prev_Leadtime_ApprViol_Comb_Qty:", a_Prev_Leadtime_ApprViol_Comb_Qty, "   a_Prev_LeadtimeApprQty: ", a_Prev_LeadtimeApprQty, "  a_Prev_LeadtimeViolQty: ", a_Prev_LeadtimeViolQty, sep="", collapse="") 
+          print(stuff)
+          stuff <- paste(cnter, "|22|a_WksOut: ", a_WksOut, "  a_PriorWkShip_Qty: ", a_PriorWkShip_Qty, "   a_OverBill_Qty:", a_OverBill_Qty, sep="", collapse="") 
+          print(stuff)
+          
+        }
+        
+        if (a_DMD_QTY == 0) {
+          a_Leadtime_ApprQty <- 0
+          a_Leadtime_ViolationQty <- 0
+        } else {
+          a_Leadtime_ApprQty <- ifelse(a_DMD_QTY < a_CumlRevWtrlQty_Minus_PrevCombQty, a_DMD_QTY, a_CumlRevWtrlQty_Minus_PrevCombQty)
+          a_Leadtime_ApprQty <- ifelse(a_Leadtime_ApprQty > a_DMD_QTY, a_DMD_QTY, a_Leadtime_ApprQty)
+          a_Leadtime_ViolationQty <- a_DMD_QTY - a_Leadtime_ApprQty
+        }
+        
+        if (a_Part == printPart & a_Corp == printCorp) {
+          stuff <- paste(cnter, "|25|", a_Part, "|", a_Corp, "|", a_WksOut, "  a_CumlRevWtrlQty_Minus_PrevCombQty: ", a_CumlRevWtrlQty_Minus_PrevCombQty, "   a_Leadtime_ApprQty: ", a_Leadtime_ApprQty, "  a_Leadtime_ViolationQty: ", a_Leadtime_ViolationQty, sep="", collapse="") 
+          print(stuff)
+        }
+        
+        vec_Leadtime_Appr_Qty <- c(vec_Leadtime_Appr_Qty, a_Leadtime_ApprQty)
+        vec_Leadtime_Violation_Qty <- c(vec_Leadtime_Violation_Qty, a_Leadtime_ViolationQty)
+        vec_PriorWk_Ship_Qty <- c(vec_PriorWk_Ship_Qty, 0)
+        
+        if (a_Part == printPart & a_Corp == printCorp) {
+          stuff <- paste(cnter, "|30|", a_Part, "|", a_Corp, "|", a_WksOut, "  a_DMD_QTY: ", a_DMD_QTY, "   a_Leadtime_ApprQty: ", a_Leadtime_ApprQty, "   a_Leadtime_ViolationQty: ", a_Leadtime_ViolationQty, "   a_Prev_LeadtimeApprQty: ", a_Prev_LeadtimeApprQty, sep="", collapse="") 
+          print(stuff)
+        }
+      } else {  #First week
+        a_Leadtime_ApprQty <- a_DMD_QTY - a_CUML_REVISED_WATERLINE_QTY_minus_OverBill
+        #a_Leadtime_ApprQty <- ifelse(a_DMD_QTY - a_CUML_REVISED_WATERLINE_QTY_minus_OverBill < 0, 0, a_DMD_QTY - a_CUML_REVISED_WATERLINE_QTY_minus_OverBill)
+        a_Leadtime_ApprQty <- ifelse(a_Leadtime_ApprQty > a_DMD_QTY, a_DMD_QTY, a_Leadtime_ApprQty)
+        a_Leadtime_ViolationQty <- a_DMD_QTY - a_Leadtime_ApprQty
+  
+        vec_Leadtime_Appr_Qty <- c(vec_Leadtime_Appr_Qty, a_Leadtime_ApprQty)
+        vec_Leadtime_Violation_Qty <- c(vec_Leadtime_Violation_Qty, a_Leadtime_ViolationQty)
+        vec_PriorWk_Ship_Qty <- c(vec_PriorWk_Ship_Qty, a_PriorWkShip_Qty)
+        
+        if (a_Part == printPart & a_Corp == printCorp) {
+          stuff <- paste(cnter, "|40|", a_Part, "|", a_Corp, "|", a_WksOut, "  a_DMD_QTY: ", a_DMD_QTY, "   a_Leadtime_ApprQty: ", a_Leadtime_ApprQty, "   a_Leadtime_ViolationQty: ", a_Leadtime_ViolationQty, sep="", collapse="") 
+          print(stuff)
+        }
+      }
+    }
+  }
+  #print("vec_Leadtime_Appr_Qty:")
+  #print(vec_Leadtime_Appr_Qty)
+  #print("vec_Leadtime_Violation_Qty:")
+  #print(vec_Leadtime_Violation_Qty)
+  #print("---")
+  
+  #aPartCustDT[["Col_LeadTime_Appropriate_Qty"]] <- vec_Leadtime_Appr_Qty
+  aPartCustDT$LeadTime_Appropriate_Qty <- vec_Leadtime_Appr_Qty
+  aPartCustDT$LeadTime_Violation_Qty <- vec_Leadtime_Violation_Qty
+  aPartCustDT$Prior_Wk_Ship_Qty <- vec_PriorWk_Ship_Qty
+  aPartCustDT$Cuml_Revs_Wtrl_Qty_minus_OverBill <- vec_Cuml_Revs_Wtrl_Qty_minus_OverBill  #CUML_REVISED_WATERLINE_QTY_MOB
+  #str(aPartCustDT)
+  
+  rm(vec_Leadtime_Appr_Qty)
+  return(aPartCustDT)
+}
+
+
+#Called by WL_RD_Upd.r
+Get_Curr_Dttm <- function() {
+  sqlStr <- paste(" SELECT TO_CHAR(SYSDATE, 'YYYY-MM-DD HH24:MI:SS') FROM DUAL ", sep="", collapse="") 
+  sqlStr <- gsub("\r?\n|\n|\r|\\s+", " ", sqlStr)
+  rs2 <- dbSendQuery(con_plan_dm_view, sqlStr)
+  SysDttm <- fetch(rs2)
+  Str_SysDttm <- SysDttm[1,1]
+  return(Str_SysDttm)
+}
+
+
