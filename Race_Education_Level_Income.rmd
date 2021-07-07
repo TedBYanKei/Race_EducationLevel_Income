@@ -28,3 +28,9 @@ plot(pressure)
 ```
 
 Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+blah, blah.
+
+![Income by Race and Education Level](images/REI.png)
+
+blah blah again

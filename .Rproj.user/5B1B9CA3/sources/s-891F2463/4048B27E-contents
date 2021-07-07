@@ -1,15 +1,13 @@
-#https://www.census.gov/data/tables/time-series/demo/income-poverty/cps-pinc/pinc-03.html
 
+#URL where data is taken from
+#https://www.census.gov/data/tables/time-series/demo/income-poverty/cps-pinc/pinc-03.html
+#Other URL's up the census.gov bread crumb trail
 #https://www.census.gov/programs-surveys/cps/data.html
 #https://www.census.gov/programs-surveys/cps/data/tables.html
 #https://www.census.gov/data/tables/time-series/demo/income-poverty/cps-pinc.html
 ##https://www.census.gov/data/tables/time-series/demo/income-poverty/cps-pinc/pinc-03.html
 
-
-
-
-
-
+#Load needed packages
 library(tidyverse)
 library(readxl)
 library(httr)
@@ -18,6 +16,7 @@ library(RColorBrewer)
 library(kableExtra)
 library(scales)
 
+#To make education levels a continous variable did this;
 #1 = Less than 9th grade
 #2 = 9th-12th nongrad
 #3 = GED
