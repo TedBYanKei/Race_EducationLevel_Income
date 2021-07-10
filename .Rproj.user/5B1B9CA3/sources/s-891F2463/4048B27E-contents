@@ -39,7 +39,7 @@ ProcessFile <- function(recURL) {
   RaceVal <- gsub(' \\(any race\\)', '', RaceVal) #Remove text
   df <- df %>% filter(row_number() %in% 16:56)  #Retrieve rows 16 - 56
   df$Income <- as.integer(seq(2500, length.out=nrow(df), by=2500)) #Create column 'Income' with incrementer for income to replace column 'A'
-  df <- df[ -c(1,2,8) ] #Remove column 'A'
+  df <- df[ -c(1,2,8) ] #Remove columns
   df <- df[c(10,1,2,3,4,5,6,7,8,9)] #Reorder columns
   df <- df %>% pivot_longer(!Income, names_to = "Edu_Attainment_Lvl", values_to = "KCount")  #Pivot the data longer
   df$Edu_Attainment_Lvl <- gsub('...', '', df$Edu_Attainment_Lvl) #Remove the "..." auto added text
@@ -59,6 +59,8 @@ vecURLs <- c("https://www2.census.gov/programs-surveys/cps/tables/pinc-03/2020/p
 Inc_By_EducLvl_Race <- map_dfr(vecURLs, ProcessFile) #Calls the function ProcessFile 
 Inc_By_EducLvl_Race_Filt <- Inc_By_EducLvl_Race %>% filter(Race != "All Races") 
 Inc_By_EducLvl_Race_Filt <- as.data.frame(Inc_By_EducLvl_Race_Filt) 
+str(Inc_By_EducLvl_Race_Filt)
+
 
 IER <- data.frame(Income=integer(),
                   Edu_Attainment_Lvl=integer(), 
@@ -77,7 +79,7 @@ for (row in 1:nrow(Inc_By_EducLvl_Race_Filt)) {
   aDF <- data.frame(Income, Edu_Attainment_Lvl, Race, stringsAsFactors=FALSE)
   IER <- rbind(IER, aDF)
 } 
-
+IER
 IER_wTxt <- inner_join(IER, DegreeData, by = c("Edu_Attainment_Lvl" = "DegreeLvl_Cont"))
 IER_wTxt$DegreeLvl <- factor(IER_wTxt$DegreeLvl, levels=c('Less than 9th grade', '9th-12th nongrad', 'GED', 'Some college', 'Assoc degree', 'Bachelors degree', 'Masters degree', 'Professional degree', 'Doctorate degree'))
 IER_wTxt$Edu_Attainment_Lvl <- as.factor(IER_wTxt$Edu_Attainment_Lvl)
@@ -86,7 +88,7 @@ IER_wTxt$Race <- factor(IER_wTxt$Race, levels=c('White', 'Asian', 'Black', 'Hisp
 ggplot(IER_wTxt, aes(x=DegreeLvl, y=Income, fill=Race)) + 
   geom_violin() +  
   scale_fill_brewer(palette="Set1") + 
-  labs(y = "Yearly Income", x = "Degree Level") +
+  labs(y = "Yearly Income", x = "Education Level") +
   theme(axis.text.x = element_text(face = "bold", size = 12, angle = 45, vjust=0.8),
         axis.text.y = element_text(face = "bold", size = 12),
         axis.title.x = element_text(face = "bold", size = 14),
