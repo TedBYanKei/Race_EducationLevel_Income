@@ -1,7 +1,7 @@
 Race, Education Level, Income
 ================
 Ted Braun
-7/5/2021
+7/9/2021
 
 
 ## Background
@@ -51,12 +51,11 @@ As an outcome of the program the following `R ggplot` violin graph I found to be
   
 ![Income by Race and Education Level](images/REI.png)  
   
-But the information that the graph is telling us is not at all satisfactory.  In fact it is quite depressing.  
-Note that Black and Hispanic people have lower incomes.  
-This can be noted by the lower weighted / wider towards the bottom income levels comparatively to White (especially) and Asian people. 
+But the information that the graph is telling us is not at all satisfactory.  In fact it is quite depressing.  Note how Black and Hispanic people have lower skewed incomes.  
+  
 What is more dispirting is that this disproportionately lower income for Blacks and Hispanic is across every educational level.  
-Discrimination clearly is not discriminating across income levels.  Look at lower skewing for Blacks and Hispanics for those with Bachelors 
-degrees and higher.  
+Discrimination knows no income level, in fact look at the comparatively lower skewing for Blacks and Hispanics for those with Bachelors degrees and higher.  
+  
 We can only hope that the disparities here, as plainly laid out by U.S. Census Bureau and Bureau of Labor and Statistics are amerliorated over time.  
 
 

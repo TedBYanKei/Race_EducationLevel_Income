@@ -113,17 +113,3 @@ IER_wTxt_GB_PW %>%
   kable_styling()
 
 
-
-
-# Extend the regression lines beyond the domain of the data
-ggplot(IER_wTxt, aes(x=DegreeLvl, y=Income, color=factor(Race))) + 
-  #geom_point(aes(size = KCount)) + 
-  geom_point(aes()) + 
-  facet_grid(vars(Race), scales = "free")
-  #geom_point(shape=1) 
-  #scale_colour_hue(l=50) + # Use a slightly darker palette than normal
-  #geom_smooth(method=lm,   # Add linear regression lines
-  #            se=FALSE,    # Don't add shaded confidence region
-  #            fullrange=TRUE) # Extend regression lines
-
-
